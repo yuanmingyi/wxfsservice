@@ -1,0 +1,16 @@
+{
+  "endPoints": {
+    "blob": "https://wxfileshare.blob.core.windows.net/",
+    "table": "https://wxfileshare.table.core.windows.net/",
+    "queue": "https://wxfileshare.queue.core.windows.net/"
+  },
+  "account": "wxfileshare",
+  "host": "wxfileshare.blob.core.windows.net",
+  "primaryKey": "NazD7m+S25LAp4z9iXesKNps1zX5AC3NxNy/YdS2sDAJmQPd8BVSnnY40/m3P77eqdStiZgCpGUF2Kmr9diPtA==",
+  "secondaryKey": "7XVm5o7Zxp4lOgAf93z5OPYL10aQ7EujNskuLudPTww03jKJxSMHLWVGnhDtWeKvsXkPSvUFpTBKSuRYLMt3BA==",
+  "version": "2014-02-14",
+  "blobName": "blob",
+  "infoBlob": "info",
+  "expiredPeriod": 24,
+  "runInterval": 15
+}
