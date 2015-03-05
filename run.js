@@ -31,23 +31,53 @@ function deleteIfExpired(containerName, blob) {
 //list all the container in the storage
 function run() {
     console.log('start scanning...');
-    azureApis.listContainers(function (containers) {
-        if (!!containers) {
+    azureApis.listContainers(function (result, containers) {
+        if (!result) {
+            console.log(util.format('request for Listing Containers fail:\n %s', containers));
+        } else if (!!containers) {
             for (var i = 0; i < containers.length; i++) {
                 // console.log(util.inspect(containers[i]));
-                azureApis.listBlobs({ container: containers[i].Name }, function (blobs) {
-                    for (var j = 0; j < blobs.length; j++) {
-                        deleteIfExpired(containers[i].Name, blobs[j]);
-                    }
-                });
-                console.log(util.format('%d blobs in container %s', blobs.length, containers[i].Name))
+                azureApis.listBlobs({ container: containers[i].Name }, (function (name) {
+                    var containerName = name;
+                    return function (result, blobs) {
+                        if (!result) {
+                            console.log(util.format('request for Listing Blobs fail:\n %s', blobs));
+                        } else {
+                            for (var j = 0; j < blobs.length; j++) {
+                                deleteIfExpired(containerName, blobs[j]);
+                            }
+                            console.log(util.format('%d blobs in container %s', blobs.length, containerName));
+                        }
+                    };
+                })(containers[i].Name));
             }
 
             console.log(util.format('total %d containers', containers.length));
         }
-        console.log(util.format('waiting for %d minutes to restart...', Math.floor(runInterval / msPerMinute)));
-        setTimeout(run, runInterval);
     });
+    azureApis.queryEntities({
+        table: config.userUploadsCountTable
+    }, function (result, entities) {
+        if (result) {
+            console.log(util.format('Entries in table %s: \n%s', config.userUploadsCountTable, util.inspect(entities)));
+        } else {
+            console.log(util.format('request for querying entries in %s fail:\n %s', config.userUploadsCountTable, entities));
+        }
+    });
+    azureApis.queryEntities({
+        table: config.fileInfoTable,
+        PartitionKey: '0cd245813b9dd7544883521a2057d00125500be2',
+        RowKey: 'user'
+    }, function (result, entities) {
+        if (result) {
+            console.log(util.format('Entries in table %s: \n%s', config.fileInfoTable, util.inspect(entities)));
+        } else {
+            console.log(util.format('request for querying entries in %s fail:\n %s', config.fileInfoTable, entities));
+        }
+    });
+
+    setTimeout(run, runInterval);
+    console.log(util.format('waiting for %d minutes to restart...', Math.floor(runInterval / msPerMinute)));
 }
 
 run();

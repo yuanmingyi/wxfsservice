@@ -9,11 +9,14 @@ var parseXml = require('xml2js').parseString;
 var config = JSON.parse(fs.readFileSync(__dirname + '/../config.json', 'utf8'));
 var clientId = process.env.WEBJOBS_NAME || "wxfileservice";
 
+var __debug = process.env.__DEBUG;
+
 function constructCanonicalizedHeaders(options) {
     var headers = options.headers;
     var msHeaders = [];
     for (var key in headers) {
         if (headers.hasOwnProperty(key) && key.toLowerCase().indexOf('x-ms-') === 0) {
+            // console.log(util.format('key: %s, value: %s', key, headers[key]));
             msHeaders.push(key.trim().toLowerCase() + ':' + headers[key].trim().replace(/\s{2,}/g, ' '));
         }
     }
@@ -64,62 +67,152 @@ function constructCanonicalizedResource(options) {
     return canonicalizedResourceString;
 }
 
-var constructAzureOptions = exports._testOptionsConstructor = function (method, host, port, path, version, date, cid, secureKey, account, testing) {
+function constructHeadersWithoutAuth(version, date, cid, moreHeaders) {
+    var headers = {
+        'x-ms-version': version,
+        'x-ms-date': date,
+        'x-ms-client-request-id': cid,
+        'Accept': 'application/json;odata=nometadata',
+        'Accept-Charset': 'UTF-8'
+    };
+
+    for (var key in moreHeaders) {
+        if (moreHeaders.hasOwnProperty(key)) {
+            headers[key] = moreHeaders[key];
+        }
+    }
+
+    return headers;
+}
+
+var generateSignature = exports.generateSignature = function (secureKey, stringToSign) {
+    // Encoding the Signature
+    // Signature=Base64(HMAC-SHA256(UTF8(StringToSign)))
+    var shahmac = crypto.createHmac("SHA256", new Buffer(secureKey, 'base64'));
+    return shahmac.update(stringToSign, 'utf-8').digest('base64');
+};
+
+function constructAuthorizationHeader(cr, keyName, account, secureKey, verb, headers, canonicalizedHeaders, canonicalizedResource) {
+    var stringToSign = '';
+    for (var i = 0; i < cr.length; i++) {
+        var key = cr[i];
+        if (key === 'verb') {
+            stringToSign += verb + '\n';
+        } else {
+            stringToSign += (headers[key] || '') + '\n';
+        }
+    }
+
+    if (canonicalizedHeaders) {
+        stringToSign += canonicalizedHeaders + '\n';
+    }
+
+    stringToSign += canonicalizedResource;
+    if (__debug) {
+        console.log(util.format('sign string:\n%s', util.inspect(stringToSign)));
+    }
+
+    var signatuare = generateSignature(secureKey, stringToSign);
+    return util.format('%s %s:%s', keyName, account, signatuare);
+}
+
+var makeAuthorizationHeader = function (lite, account, secureKey, verb, headers, canonicalizedHeaders, canonicalizedResource) {
+    var cr = ['verb', 'Content-Encoding', 'Content-Language', 'Content-Length', 'Content-MD5', 'Content-Type', 'Date', 'If-Modified-Since', 'If-Match', 'If-None-Match', 'If-Unmodified-Since', 'Range'];
+    if (lite) {
+        cr = ['verb', 'Content-MD5', 'Content-Type', 'Date'];
+    }
+    var keyName = lite ? 'SharedKeyLite' : 'SharedKey';
+    return constructAuthorizationHeader(cr, keyName, account, secureKey, verb, headers, canonicalizedHeaders, canonicalizedResource);
+};
+
+var makeTableAuthorizationHeader = function (lite, account, secureKey, verb, headers, canonicalizedResource) {
+    var cr = lite ? ['x-ms-date'] : ['verb', 'Content-MD5', 'Content-Type', 'x-ms-date'];
+    var keyName = lite ? 'SharedKeyLite' : 'SharedKey';
+    return constructAuthorizationHeader(cr, keyName, account, secureKey, verb, headers, '', canonicalizedResource);
+}
+
+var constructAzureOptions = exports._testOptionsConstructor = function (method, host, port, path, version, date, cid, secureKey, account, lite) {
     var options = {
         method: method,
         hostname: host,
         port: port,
         path: path,
-        headers: {
-            'x-ms-version': version,
-            'x-ms-date': date,
-            'x-ms-client-request-id': cid,
-            'Authorization': 'SharedKey ' + account + ':',
-            'Accept': 'application/json;odata=nometadata',
-            'Accept-Charset': 'UTF-8'
-        }
+        headers: constructHeadersWithoutAuth(version, date, cid)
     };
 
     var canonicalizedHeaders = constructCanonicalizedHeaders(options);
     var canonicalizedResource = constructCanonicalizedResource(options);
-    var stringToSign = format('%s\n\n\n\n\n\n\n\n\n\n\n\n%s\n%s', method, canonicalizedHeaders, canonicalizedResource);
-    if (testing) {
-        console.log(format('sign string:\n%s', util.inspect(stringToSign)));
-    }
-
-    // Encoding the Signature
-    // Signature=Base64(HMAC-SHA256(UTF8(StringToSign)))
-    var shahmac = crypto.createHmac("SHA256", new Buffer(secureKey, 'base64'));
-    var signature = shahmac.update(stringToSign, 'utf-8').digest('base64');
-    options.headers['Authorization'] += signature;
+    options.headers['Authorization'] = makeAuthorizationHeader(lite, account, secureKey, method, options.headers, canonicalizedHeaders, canonicalizedResource);
 
     return options;
-}
+};
+
+var constructAzureTableOptions = exports._testTableOptionsConstructor = function (method, host, port, path, version, date, cid, odataVersion, maxOdataVersion, secureKey, account, lite) {
+    var options = {
+        method: method,
+        hostname: host,
+        port: port,
+        path: path,
+        headers: constructHeadersWithoutAuth(version, date, cid, { DataServiceVersion: odataVersion, MaxDataServiceVersion: maxOdataVersion })
+    };
+
+    var canonicalizedResource = constructCanonicalizedResource(options);
+    options.headers['Authorization'] = makeTableAuthorizationHeader(lite, account, secureKey, method, options.headers, canonicalizedResource);
+
+    return options;
+};
+
+var getTypeFromHost = function (host) {
+    var firstDot = host.indexOf('.');
+    return host.slice(firstDot + 1, host.indexOf('.', firstDot + 1));
+};
 
 // compose the REST API request headers to the azure storage,
 // refer to https://msdn.microsoft.com/en-us/library/azure/dd179428.aspx
-var azureRequest = exports.request = function (method, path, port, callback) {
+var azureRequest = exports.request = function (method, host, path, port, callback) {
     var protocol = (port === 443 ? https : http);
-    var options = constructAzureOptions(
-        method,
-        config.host,
-        port,
-        path,
-        config.version,
-        new Date().toUTCString(),
-        clientId,
-        config.primaryKey,
-        config.account,
-        false);
+    var type = getTypeFromHost(host);
+    var options = null;
+    if (type === 'table') {
+        options = constructAzureTableOptions(
+            method,
+            host,
+            port,
+            path,
+            config.version,
+            (new Date()).toUTCString(),
+            clientId,
+            config.dataServiceVersion,
+            config.maxDataServiceVersion,
+            config.primaryKey,
+            config.account,
+            true);
+    } else {
+        options = constructAzureOptions(
+            method,
+            host,
+            port,
+            path,
+            config.version,
+            (new Date()).toUTCString(),
+            clientId,
+            config.primaryKey,
+            config.account,
+            false);
+    }
+
+    if (__debug === 'trace') {
+        console.log(util.format('request option:\n%s', util.inspect(options)));
+    }
 
     return protocol.request(options, callback);
-}
+};
 
 exports.restApis = function (protocol) {
     var obj = {};
     var protocol = protocol || 'https';
     var port = (protocol.toLowerCase() === 'http' ? 80 : 443);
-    var createApi = function (method, makePathFunction, responseHandler) {
+    var createApi = function (method, host, makePathFunction, responseHandler) {
         return function (params, userCallback) {
             var userCallback = userCallback || params;
             if (typeof params === 'function') {
@@ -128,7 +221,7 @@ exports.restApis = function (protocol) {
                 params = {};
             }
             var pathWithParams = makePathFunction(params);
-            var req = azureRequest(method, pathWithParams, port, function (res) {
+            var req = azureRequest(method, host, pathWithParams, port, function (res) {
                 responseHandler(res, userCallback);
             });
 
@@ -140,9 +233,21 @@ exports.restApis = function (protocol) {
         };
     };
 
+    var createBlobApi = function (method, makePathFunction, responseHandler) {
+        return createApi(method, config.blobHost, makePathFunction, responseHandler);
+    };
+
+    var createTableApi = function (method, makePathFunction, responseHandler) {
+        return createApi(method, config.tableHost, makePathFunction, responseHandler);
+    };
+
+    var createQueueApi = function (method, makePathFunction, responseHandler) {
+        return createApi(method, config.queueHost, makePathFunction, responseHandler);
+    };
+
     // list all the containers
-    // the user callback receives one paramter: the returned js object 
-    obj.listContainers = createApi('GET', function (params) {
+    // the user callback receives two parameters: 1. the request result (true for success and false for failure) 2. the object include all the containers
+    obj.listContainers = createBlobApi('GET', function (params) {
         var path = '/?comp=list';
         for (var k in params) {
             if (params.hasOwnProperty(k)) {
@@ -152,7 +257,7 @@ exports.restApis = function (protocol) {
         return path;
     }, function (res, callback) {
         var output = '';
-        console.log(config.host + ':' + res.statusCode);
+        console.log(config.blobHost + ':' + res.statusCode);
         res.setEncoding('utf8');
 
         res.on('data', function (chunk) {
@@ -160,6 +265,13 @@ exports.restApis = function (protocol) {
         });
 
         res.on('end', function () {
+            if (res.statusCode !== 200) {
+                if (!!callback) {
+                    callback(false, output);
+                }
+                return;
+            }
+
             parseXml(output, function (err, result) {
                 var result = result;
                 if (err) {
@@ -178,7 +290,7 @@ exports.restApis = function (protocol) {
                     }
                 }
                 if (!!callback) {
-                    callback(result);
+                    callback(!err, result);
                 }
             });
         });
@@ -186,7 +298,7 @@ exports.restApis = function (protocol) {
 
     // delete the specified container
     // the user callback receives a boolean indicated whether the operation is successful
-    obj.deleteContainer = createApi('DELETE', function (params) {
+    obj.deleteContainer = createBlobApi('DELETE', function (params) {
         var containerName = params;
         var timeout = 60;
         if (typeof params === 'object') {
@@ -204,8 +316,8 @@ exports.restApis = function (protocol) {
     });
 
     // list all the blobs in a specified container
-    // the user callback receives one paramter: the returned js object
-    obj.listBlobs = createApi('GET', function (params) {
+    // the user callback receives two parameters: 1. the request result (true for success and false for failure) 2. the object include the blobs in the container
+    obj.listBlobs = createBlobApi('GET', function (params) {
         var path = '/' + params.container + '?restype=container&comp=list';
         for (var k in params) {
             if (params.hasOwnProperty(k) && k !== 'container') {
@@ -215,7 +327,7 @@ exports.restApis = function (protocol) {
         return path;
     }, function (res, callback) {
         var output = '';
-        console.log(config.host + ':' + res.statusCode);
+        console.log(config.blobHost + ':' + res.statusCode);
         res.setEncoding('utf8');
 
         res.on('data', function (chunk) {
@@ -223,6 +335,13 @@ exports.restApis = function (protocol) {
         });
 
         res.on('end', function () {
+            if (res.statusCode !== 200) {
+                if (!!callback) {
+                    callback(false, output);
+                }
+                return;
+            }
+
             parseXml(output, function (err, result) {
                 var result = result;
                 if (err) {
@@ -241,7 +360,7 @@ exports.restApis = function (protocol) {
                     }
                 }
                 if (!!callback) {
-                    callback(result);
+                    callback(!err, result);
                 }
             });
         });
@@ -249,7 +368,7 @@ exports.restApis = function (protocol) {
 
     // delete the specified blob in specified container
     // the user callback receives a boolean indicated whether the operation is successful
-    obj.deleteBlob = createApi('DELETE', function (params) {
+    obj.deleteBlob = createBlobApi('DELETE', function (params) {
         var containerName = params.container;
         var blobName = params.blob;
         var timeout = params.timeOut || 60;
@@ -263,32 +382,35 @@ exports.restApis = function (protocol) {
         });
     });
 
-
-    obj.queryEntities = createApi('GET', function (params) {
+    // the user callback receives two parameters: 1. the query result (true for success and false for failure) 2. the object include the result entities
+    obj.queryEntities = createTableApi('GET', function (params) {
         var path = '/' + params.table;
-        var properties = '';
+        var query = '';
 
-        if (params.partitionKey && params.rowKey) {
-            path += "(PartitionKey='" + encodeURIComponent(params.partitionKey) + "',RowKey='" + encodeURIComponent(params.rowKey) + "')?$select=";
+        if (params.PartitionKey && params.RowKey) {
+            path += "(PartitionKey='" + encodeURIComponent(params.PartitionKey) + "',RowKey='" + encodeURIComponent(params.RowKey) + "')";
         } else {
-            path += "()?filter=" + encodeURIComponent(params.filter) + "?$select=";
+            path += "()";
         }
 
-        if (params.properties instanceof Array) {
-            for (var i = 0; i < params.properties.length; i++) {
-                if (i > 0) {
-                    properties += ',';
+        if (typeof params.query === 'object') {
+            for (var key in params.query) {
+                if (params.query.hasOwnProperty(key)) {
+                    if (query === '') {
+                        query = '?';
+                    } else {
+                        query += '&';
+                    }
+
+                    query += key + '=' + encodeURIComponent(params.query[key]);
                 }
-                properties += encodeURIComponent(params[i]);
             }
-        } else {
-            properties = '*';
         }
 
-        return path + properties;
+        return path + query;
     }, function (res, callback) {
         var output = '';
-        console.log(config.host + ':' + res.statusCode);
+        console.log(config.tableHost + ':' + res.statusCode);
         res.setEncoding('utf8');
 
         res.on('data', function (chunk) {
@@ -296,9 +418,16 @@ exports.restApis = function (protocol) {
         });
 
         res.on('end', function () {
+            if (res.statusCode !== 200) {
+                if (!!callback) {
+                    callback(false, output);
+                }
+                return;
+            }
+
             result = JSON.parse(output);
             if (!!callback) {
-                callback(result.value);
+                callback(true, result);
             }
         });
     });
@@ -306,10 +435,10 @@ exports.restApis = function (protocol) {
     return obj;
 };
 
-exports.httpRequest = function (method, path, callback) {
-    azureRequest(method, path, 80, callback);
+exports.httpRequest = function (method, host, path, callback) {
+    azureRequest(method, host, path, 80, callback);
 };
 
-exports.httpsRequest = function (method, path, callback) {
-    azureRequest(method, path, 443, callback);
-}
+exports.httpsRequest = function (method, host, path, callback) {
+    azureRequest(method, host, path, 443, callback);
+};

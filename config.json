@@ -5,12 +5,19 @@
     "queue": "https://wxfileshare.queue.core.windows.net/"
   },
   "account": "wxfileshare",
-  "host": "wxfileshare.blob.core.windows.net",
+  "blobHost": "wxfileshare.blob.core.windows.net",
+  "tableHost": "wxfileshare.table.core.windows.net",
+  "queueHost": "wxfileshare.queue.core.windows.net",
+  "version": "2014-02-14",
+  "dataServiceVersion": "3.0;NetFx",
+  "maxDataServiceVersion": "3.0;NetFx",
   "primaryKey": "NazD7m+S25LAp4z9iXesKNps1zX5AC3NxNy/YdS2sDAJmQPd8BVSnnY40/m3P77eqdStiZgCpGUF2Kmr9diPtA==",
   "secondaryKey": "7XVm5o7Zxp4lOgAf93z5OPYL10aQ7EujNskuLudPTww03jKJxSMHLWVGnhDtWeKvsXkPSvUFpTBKSuRYLMt3BA==",
-  "version": "2014-02-14",
-  "blobName": "blob",
-  "infoBlob": "info",
+
+  "userUploadsCountTable": "useruploads",
+  "fileInfoTable": "fileinfo",
+  "maxFilesPerUser": 100,
   "expiredPeriod": 24,
+
   "runInterval": 15
 }
