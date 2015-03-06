@@ -2,7 +2,6 @@ var https = require('https');
 var http = require('http');
 var fs = require('fs');
 var util = require('util');
-var format = util.format;
 var crypto = require('crypto');
 var parseXml = require('xml2js').parseString;
 
@@ -275,7 +274,7 @@ exports.restApis = function (protocol) {
             parseXml(output, function (err, result) {
                 var result = result;
                 if (err) {
-                    console.log(format('parse xml data failed: %s', util.inpsect(err)));
+                    console.log(util.format('parse xml data failed: %s', util.inpsect(err)));
                     result = undefined;
                 } else {
                     result = result.EnumerationResults.Containers[0].Container || [];
@@ -345,7 +344,7 @@ exports.restApis = function (protocol) {
             parseXml(output, function (err, result) {
                 var result = result;
                 if (err) {
-                    console.log(format('parse xml data failed: %s', util.inpsect(err)));
+                    console.log(util.format('parse xml data failed: %s', util.inpsect(err)));
                     result = undefined;
                 } else {
                     result = result.EnumerationResults.Blobs[0].Blob || [];
@@ -371,13 +370,30 @@ exports.restApis = function (protocol) {
     obj.deleteBlob = createBlobApi('DELETE', function (params) {
         var containerName = params.container;
         var blobName = params.blob;
-        var timeout = params.timeOut || 60;
-        return '/' + containerName + '/' + blobName;
+        var timeout = params.timeOut || 60; // seconds
+        return '/' + containerName + '/' + blobName + '?timeout=' + timeout;
     }, function (res, callback) {
         var result = (res.statusCode === 202);
         res.on('end', function () {
             if (!!callback) {
                 callback(result);
+            }
+        });
+    });
+
+    obj.getBlobProperties = createBlobApi('HEAD', function (params) {
+        var containerName = params.container;
+        var blobName = params.blob;
+        var timeout = params.timeOut || 60; // seconds
+        return '/' + containerName + '/' + blobName + '?timeout=' + timeout;
+    }, function (res, callback) {
+        res.on('end', function () {
+            var properties = null;
+            if (res.statusCode === 200) {
+                properties = res.headers;
+            }
+            if (!!callback) {
+                callback(properties);
             }
         });
     });
@@ -428,6 +444,20 @@ exports.restApis = function (protocol) {
             result = JSON.parse(output);
             if (!!callback) {
                 callback(true, result);
+            }
+        });
+    });
+
+    obj.deleteEntity = createTableApi('DELETE', function (params) {
+        var table = params.table;
+        var partitionKey = params.partitionKey;
+        var rowKey = params.rowKey;
+        return util.format("/%s(PartitionKey='%s', RowKey='%s')", partitionKey, rowKey);
+    }, function (res, callback) {
+        var result = (res.statusCode === 204);
+        res.on('end', function () {
+            if (!!callback) {
+                callback(result);
             }
         });
     });
